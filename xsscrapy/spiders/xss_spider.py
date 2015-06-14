@@ -5,24 +5,19 @@ import urllib
 import string
 import random
 import logging
-import thread
+import re
+
 from scrapy.contrib.linkextractors import LinkExtractor
+
 from scrapy.contrib.spiders import CrawlSpider, Rule
 from scrapy.http import FormRequest, Request
 from scrapy.http.cookies import CookieJar
 import lxml.etree
 import lxml.html
-import re
 
 from ignore import IgnoreHandler
 from xsscrapy.items import inj_resp
 from xsscrapy.loginform import fill_login_form
-
-
-
-
-
-
 
 # from IPython import embed
 
@@ -213,7 +208,6 @@ class XSSspider(CrawlSpider):
         Checks for XSS in headers and url'''
         reqs = []
         orig_url = response.url
-        logging.info(orig_url)
         body = response.body
 
         set_cookie = ""
@@ -479,7 +473,7 @@ class XSSspider(CrawlSpider):
                     payloaded_urls.append((newURL, changed_value, payload))
 
         # Payload the path, like: example.com/page1.php?param=val becomes example.com/page1.php/FUZZCHARS/?param=val
-        payloaded_urls.append(self.payload_path(url))
+        # payloaded_urls.append(self.payload_path(url))
 
         if len(payloaded_urls) > 0:
             return payloaded_urls
