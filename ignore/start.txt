@@ -1,0 +1,9 @@
+http://passport.baidu.com/v2
+http://tieba.baidu.com/home/main?fr
+https://passport.baidu.com/v2
+http://baike.baidu.com/view/
+http://wenku.baidu.com/list
+http://gongyi.baidu.com/details.html/
+http://baike.baidu.com/fenlei/
+http://wenku.baidu.com/view/
+http://wenku.baidu.com/p/
