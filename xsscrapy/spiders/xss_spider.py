@@ -1,33 +1,37 @@
 # -- coding: utf-8 --
 
+from urlparse import urlparse, parse_qsl, urljoin
+import urllib
+import string
+import random
+import logging
+import thread
 from scrapy.contrib.linkextractors import LinkExtractor
 from scrapy.contrib.spiders import CrawlSpider, Rule
 from scrapy.http import FormRequest, Request
-from scrapy.selector import Selector
-from xsscrapy.items import inj_resp
-from xsscrapy.loginform import fill_login_form
-from urlparse import urlparse, parse_qsl, urljoin
-
 from scrapy.http.cookies import CookieJar
-from cookielib import Cookie
-
-from lxml.html import soupparser, fromstring
 import lxml.etree
 import lxml.html
-import urllib
 import re
-import sys
-import cgi
-import requests
-import string
-import random
 
-#from IPython import embed
+from ignore import IgnoreHandler
+from xsscrapy.items import inj_resp
+from xsscrapy.loginform import fill_login_form
+
+
+
+
+
+
+
+# from IPython import embed
 
 __author__ = 'Dan McInerney danhmcinerney@gmail.com'
 
+
 class XSSspider(CrawlSpider):
     name = 'xsscrapy'
+    logging.basicConfig(filename='xsscrapy.log', level=logging.DEBUG)
 
     # If you're logging into a site with a logout link, you'll want to
     # uncomment the rule below and comment the shorter one right after to
@@ -40,7 +44,10 @@ class XSSspider(CrawlSpider):
         self.start_urls = [kwargs.get('url')]
         hostname = urlparse(self.start_urls[0]).hostname
         # With subdomains
-        self.allowed_domains = [hostname] # adding [] around the value seems to allow it to crawl subdomain of value
+        allow_domains = [hostname]
+        if kwargs.get('domain') != 'None':
+            allow_domains = [kwargs.get('domain')]
+        self.allowed_domains = allow_domains  # adding [] around the value seems to allow it to crawl subdomain of value
         self.delim = '1zqjx'
         # semi colon goes on end because sometimes it cuts stuff off like
         # gruyere or the second cookie delim
@@ -64,16 +71,50 @@ class XSSspider(CrawlSpider):
             self.http_user = self.login_user
             self.http_pass = self.login_pass
 
+        self.cookie = kwargs.get('cookie')
+
+        self.cur_cookie = self.parse_raw_cookie()
+        handler = IgnoreHandler()
+        self.handler = handler
+        # thread.start_new_thread(handler.start_watch())
+        handler.start_watch()
+
+
     def parse_start_url(self, response):
         ''' Creates the XSS tester requests for the start URL as well as the request for robots.txt '''
         u = urlparse(response.url)
-        self.base_url = u.scheme+'://'+u.netloc
-        robots_url = self.base_url+'/robots.txt'
+        self.base_url = u.scheme + '://' + u.netloc
+        robots_url = self.base_url + '/robots.txt'
         robot_req = [Request(robots_url, callback=self.robot_parser)]
 
         reqs = self.parse_resp(response)
         reqs += robot_req
-        return reqs
+        return self.filter_ignore(reqs)
+
+    def filter_ignore(self, requests):
+        ignore_start = self.handler.start_with
+        ignore_pat = self.handler.pat
+        filtered = []
+        for req in requests:
+            url = req.url
+            mt = False
+            for st in ignore_start:
+                if url[0, len(st)] == st:
+                    mt = True
+            if not mt:
+                filtered.append(req)
+        requests = filtered
+        filtered = []
+        for req in requests:
+            url = req.url
+            mt = False
+            for st in ignore_pat:
+                if re.compile(st).match(url):
+                    mt = True
+            if not mt:
+                filtered.append(req)
+        return filtered
+        pass
 
     #### Handle logging in if username and password are given as arguments ####
     def start_requests(self):
@@ -81,11 +122,40 @@ class XSSspider(CrawlSpider):
             otherwise pass it to the normal callback function '''
         if self.login_user and self.login_pass:
             if self.basic_auth == 'true':
-                yield Request(url=self.start_urls[0]) # Take out the callback arg so crawler falls back to the rules' callback
+                yield Request(
+                    url=self.start_urls[0])  # Take out the callback arg so crawler falls back to the rules' callback
             else:
                 yield Request(url=self.start_urls[0], callback=self.login)
         else:
-            yield Request(url=self.start_urls[0]) # Take out the callback arg so crawler falls back to the rules' callback
+            if self.cur_cookie is None:
+                yield Request(
+                    url=self.start_urls[0])  # Take out the callback arg so crawler falls back to the rules' callback
+            else:
+                yield Request(url=self.start_urls[0], cookies=self.parse_raw_cookie())
+
+    def parse_raw_cookie(self, raw_cookie=None):
+        if raw_cookie is None:
+            raw_cookie = self.cookie
+        if raw_cookie is None:
+            return None
+        dct = {}
+        kv = raw_cookie.split(';')
+        for i in kv:
+            pt = i.split('=')
+            dct[pt[0]] = pt[1]
+        return dct
+        pass
+
+    def parse_set_cookie(self, set_cookie):
+        if set_cookie is None:
+            return None
+        dct = {}
+        kv = set_cookie.split(';')
+        for i in kv:
+            pt = i.split('=')
+            dct[pt[0]] = pt[1]
+            break
+        return dct
 
     def login(self, response):
         ''' Fill out the login form and return the request'''
@@ -93,14 +163,14 @@ class XSSspider(CrawlSpider):
         try:
             args, url, method = fill_login_form(response.url, response.body, self.login_user, self.login_pass)
             return FormRequest(url,
-                              method=method,
-                              formdata=args,
-                              callback=self.confirm_login,
-                              dont_filter=True)
+                               method=method,
+                               formdata=args,
+                               callback=self.confirm_login,
+                               dont_filter=True)
 
         except Exception:
-            self.log('Login failed') # Make this more specific eventually
-            return Request(url=self.start_urls[0], dont_filter=True) # Continue crawling
+            self.log('Login failed')  # Make this more specific eventually
+            return Request(url=self.start_urls[0], dont_filter=True)  # Continue crawling
 
     def confirm_login(self, response):
         ''' Check that the username showed up in the response page '''
@@ -110,6 +180,7 @@ class XSSspider(CrawlSpider):
         else:
             self.log('FAILED to log in! (or at least cannot find the username on the post-login page which may be OK)')
             return Request(url=self.start_urls[0], dont_filter=True)
+
     ###########################################################################
 
     def robot_parser(self, response):
@@ -122,11 +193,19 @@ class XSSspider(CrawlSpider):
                 except IndexError:
                     # In case Disallow: has no value after it
                     continue
-                disallowed = self.base_url+address
+                disallowed = self.base_url + address
                 disallowed_urls.add(disallowed)
-        reqs = [Request(u, callback=self.parse_resp) for u in disallowed_urls if u != self.base_url]
+
+        reqs = []
+        for u in disallowed_urls:
+            if u != self.base_url:
+                if self.cur_cookie is None:
+                    reqs.append(Request(u, callback=self.parse_resp))
+                else:
+                    reqs.append(Request(u, cookies=self.parse_raw_cookie(), callback=self.parse_resp))
+
         for r in reqs:
-            self.log('Added robots.txt disallowed URL to our queue: '+r.url)
+            self.log('Added robots.txt disallowed URL to our queue: ' + r.url)
         return reqs
 
     def parse_resp(self, response):
@@ -134,7 +213,17 @@ class XSSspider(CrawlSpider):
         Checks for XSS in headers and url'''
         reqs = []
         orig_url = response.url
+        logging.info(orig_url)
         body = response.body
+
+        set_cookie = ""
+        try:
+            set_cookie = response.headers["Set-Cookie"]
+        except:
+            pass
+
+        if set_cookie != "":
+            self.cur_cookie.update(self.parse_set_cookie(set_cookie))
 
         try:
             # soupparser will handle broken HTML better (like identical attributes) but god damn will you pay for it
@@ -178,7 +267,8 @@ class XSSspider(CrawlSpider):
                 reqs += form_reqs
 
         # Test URL variables with xss strings
-        payloaded_urls, url_delim_str = self.make_URLs(orig_url, payload) # list of tuples where item[0]=url, and item[1]=changed param
+        payloaded_urls, url_delim_str = self.make_URLs(orig_url,
+                                                       payload)  # list of tuples where item[0]=url, and item[1]=changed param
         print 'URL:', payloaded_urls, url_delim_str
         if payloaded_urls:
             url_reqs = self.make_url_reqs(orig_url, payloaded_urls, url_delim_str)
@@ -190,7 +280,7 @@ class XSSspider(CrawlSpider):
             r.meta['orig_body'] = body
 
         # Each Request here will be given a specific callback relative to whether it was URL variables or form inputs that were XSS payloaded
-        return reqs
+        return self.filter_ignore(reqs)
 
     def url_valid(self, url, orig_url):
         # Make sure there's a form action url
@@ -202,7 +292,7 @@ class XSSspider(CrawlSpider):
         if '://' not in url:
             self.log('Form URL contains no scheme, attempting to put together a working form submissions URL')
             proc_url = self.url_processor(orig_url)
-            url = proc_url[1]+proc_url[0]+url
+            url = proc_url[1] + proc_url[0] + url
 
         return url
 
@@ -225,7 +315,7 @@ class XSSspider(CrawlSpider):
             if '://' in i:
                 # Skip iframes to outside sources
                 try:
-                    if self.base_url in i[:len(self.base_url)+1]:
+                    if self.base_url in i[:len(self.base_url) + 1]:
                         url = i
                 except IndexError:
                     continue
@@ -234,7 +324,10 @@ class XSSspider(CrawlSpider):
                 url = urljoin(orig_url, i)
 
             if url:
-                iframe_reqs.append(Request(url))
+                if self.cur_cookie is None:
+                    iframe_reqs.append(Request(url))
+                else:
+                    iframe_reqs.append(Request(url, cookies=self.parse_raw_cookie()))
 
         if len(iframe_reqs) > 0:
             return iframe_reqs
@@ -271,27 +364,41 @@ class XSSspider(CrawlSpider):
                             try:
                                 form.fields[i.name] = payload
                             except ValueError as e:
-                                self.log('Error: '+str(e))
+                                self.log('Error: ' + str(e))
                                 continue
                             xss_param = i.name
                             values = form.form_values()
-                            req = FormRequest(url,
-                                              formdata=values,
-                                              method=method,
-                                              meta={'payload':payload,
-                                                    'xss_param':xss_param,
-                                                    'orig_url':orig_url,
-                                                    'xss_place':'form',
-                                                    'POST_to':url,
-                                                    'delim':delim_str},
-                                              dont_filter=True,
-                                              callback=self.xss_chars_finder)
+                            if self.cur_cookie is None:
+                                req = FormRequest(url,
+                                                  formdata=values,
+                                                  method=method,
+                                                  meta={'payload': payload,
+                                                        'xss_param': xss_param,
+                                                        'orig_url': orig_url,
+                                                        'xss_place': 'form',
+                                                        'POST_to': url,
+                                                        'delim': delim_str},
+                                                  dont_filter=True,
+                                                  callback=self.xss_chars_finder)
+                            else:
+                                req = FormRequest(url,
+                                                  formdata=values,
+                                                  method=method,
+                                                  meta={'payload': payload,
+                                                        'xss_param': xss_param,
+                                                        'orig_url': orig_url,
+                                                        'xss_place': 'form',
+                                                        'POST_to': url,
+                                                        'delim': delim_str},
+                                                  dont_filter=True,
+                                                  cookies=self.parse_raw_cookie(),
+                                                  callback=self.xss_chars_finder)
                             reqs.append(req)
                             # Reset the value
                             try:
                                 form.fields[i.name] = orig_val
                             except ValueError as e:
-                                self.log('Error: '+str(e))
+                                self.log('Error: ' + str(e))
                                 continue
 
         if len(reqs) > 0:
@@ -304,14 +411,17 @@ class XSSspider(CrawlSpider):
         delim_str = self.delim + two_rand_letters
         payload = delim_str + payload + delim_str + ';9'
 
+        cks = {'userinput': payload}
+        if self.cur_cookie is not None:
+            cks.update(self.parse_raw_cookie())
         reqs = [Request(url,
-                        meta={'xss_place':'header',
-                              'cookiejar':CookieJar(),
-                              'xss_param':xss_param,
-                              'orig_url':url,
-                              'payload':payload,
-                              'delim':delim_str},
-                        cookies={'userinput':payload},
+                        meta={'xss_place': 'header',
+                              'cookiejar': CookieJar(),
+                              'xss_param': xss_param,
+                              'orig_url': url,
+                              'payload': payload,
+                              'delim': delim_str},
+                        cookies=cks,
                         callback=self.xss_chars_finder,
                         dont_filter=True)]
 
@@ -328,7 +438,7 @@ class XSSspider(CrawlSpider):
 
         if '=' in url and '?' in url:
             # If URL has variables, payload them
-            payloaded_urls = self.payload_url_vars(url, payload) 
+            payloaded_urls = self.payload_url_vars(url, payload)
         else:
             # If URL has no variables, tack payload onto end of URL
             payloaded_urls = self.payload_end_of_url(url, payload)
@@ -340,9 +450,9 @@ class XSSspider(CrawlSpider):
 
         # Make URL test and delim strings unique
         if url[-1] == '/':
-            payloaded_url = url+payload
+            payloaded_url = url + payload
         else:
-            payloaded_url = url+'/'+payload
+            payloaded_url = url + '/' + payload
 
         return [(payloaded_url, 'end of url', payload)]
 
@@ -355,8 +465,8 @@ class XSSspider(CrawlSpider):
         if netloc and protocol and path:
             for payload in modded_params:
                 for params in modded_params[payload]:
-                    joinedParams = urllib.urlencode(params, doseq=1) # doseq maps the params back together
-                    newURL = urllib.unquote(protocol+netloc+path+'?'+joinedParams)
+                    joinedParams = urllib.urlencode(params, doseq=1)  # doseq maps the params back together
+                    newURL = urllib.unquote(protocol + netloc + path + '?' + joinedParams)
 
                     # Prevent nonpayloaded URLs
                     if self.test_str not in newURL:
@@ -374,16 +484,17 @@ class XSSspider(CrawlSpider):
         if len(payloaded_urls) > 0:
             return payloaded_urls
 
-#    def payload_path(self, url):
-#        ''' Payload the path, like: example.com/page1.php?param=val becomes example.com/page1.php/FUZZCHARS/?param=val '''
-#        parsed = urlparse(url)
+    def payload_path(self, url):
+        ''' Payload the path, like: example.com/page1.php?param=val becomes example.com/page1.php/FUZZCHARS/?param=val '''
+        return urlparse(url)
+
 
     def getURLparams(self, url):
         ''' Parse out the URL parameters '''
         parsedUrl = urlparse(url)
         fullParams = parsedUrl.query
-        #parse_qsl rather than parse_ps in order to preserve order
-        params = parse_qsl(fullParams, keep_blank_values=True) 
+        # parse_qsl rather than parse_ps in order to preserve order
+        params = parse_qsl(fullParams, keep_blank_values=True)
         return params
 
     def change_params(self, params, payload):
@@ -404,21 +515,21 @@ class XSSspider(CrawlSpider):
                 # If a parameter has not been modified yet
                 if param not in changedParams and changedParam == False:
                     changedParams.append(param)
-                    p = (param, value+payload)
+                    p = (param, value + payload)
                     moddedParams.append(p)
                     changedParam = param
                 else:
                     moddedParams.append(p)
 
             # Reset so we can step through again and change a diff param
-            #allModdedParams[payload].append(moddedParams)
+            # allModdedParams[payload].append(moddedParams)
             allModdedParams[payload].append(moddedParams)
 
             changedParam = False
             moddedParams = []
 
         # Reset the list of changed params each time a new payload is attempted
-        #changedParams = []
+        # changedParams = []
 
         if len(allModdedParams) > 0:
             return allModdedParams
@@ -430,7 +541,7 @@ class XSSspider(CrawlSpider):
             # Get the path
             path = parsed_url.path
             # Get the protocol
-            protocol = parsed_url.scheme+'://'
+            protocol = parsed_url.scheme + '://'
             # Get the hostname (includes subdomains)
             hostname = parsed_url.hostname
             # Get netloc (domain.com:8080)
@@ -438,7 +549,7 @@ class XSSspider(CrawlSpider):
             # Get doc domain
             doc_domain = '.'.join(hostname.split('.')[-2:])
         except:
-            self.log('Could not parse url: '+url)
+            self.log('Could not parse url: ' + url)
             return
 
         return (netloc, protocol, doc_domain, path)
@@ -446,14 +557,25 @@ class XSSspider(CrawlSpider):
     def make_url_reqs(self, orig_url, payloaded_urls, delim_str):
         ''' Make the URL requests '''
 
-        reqs = [Request(url[0],
-                        meta={'xss_place':'url',
-                              'xss_param':url[1],
-                              'orig_url':orig_url,
-                              'payload':url[2],
-                              'delim':delim_str},
-                        callback = self.xss_chars_finder)
-                        for url in payloaded_urls] # Meta is the payload
+        reqs = []
+        for url in payloaded_urls:
+            if self.cur_cookie is None:
+                reqs.append(Request(url[0],
+                                    meta={'xss_place': 'url',
+                                          'xss_param': url[1],
+                                          'orig_url': orig_url,
+                                          'payload': url[2],
+                                          'delim': delim_str},
+                                    callback=self.xss_chars_finder))
+            else:
+                reqs.append(Request(url[0],
+                                    meta={'xss_place': 'url',
+                                          'xss_param': url[1],
+                                          'orig_url': orig_url,
+                                          'payload': url[2],
+                                          'delim': delim_str},
+                                    cookies=self.parse_raw_cookie(),
+                                    callback=self.xss_chars_finder))
 
         if len(reqs) > 0:
             return reqs
@@ -465,17 +587,31 @@ class XSSspider(CrawlSpider):
         delim_str = self.delim + two_rand_letters
         payload = delim_str + payload + delim_str + ';9'
 
-        reqs = [Request(url,
-                        headers={inj_header:payload},
-                        meta={'xss_place':'header',
-                              'xss_param':inj_header,
-                              'orig_url':url,
-                              'payload':payload,
-                              'delim':delim_str,
-                              'UA':self.get_user_agent(inj_header, payload)},
-                        dont_filter=True,
-                        callback = self.xss_chars_finder)
-                for inj_header in inj_headers]
+        reqs = []
+        for inj_header in inj_headers:
+            if self.cur_cookie is None:
+                reqs.append(Request(url,
+                                    headers={inj_header: payload},
+                                    meta={'xss_place': 'header',
+                                          'xss_param': inj_header,
+                                          'orig_url': url,
+                                          'payload': payload,
+                                          'delim': delim_str,
+                                          'UA': self.get_user_agent(inj_header, payload)},
+                                    dont_filter=True,
+                                    callback=self.xss_chars_finder))
+            else:
+                reqs.append(Request(url,
+                                    headers={inj_header: payload},
+                                    meta={'xss_place': 'header',
+                                          'xss_param': inj_header,
+                                          'orig_url': url,
+                                          'payload': payload,
+                                          'delim': delim_str,
+                                          'UA': self.get_user_agent(inj_header, payload)},
+                                    dont_filter=True,
+                                    cookies=self.parse_raw_cookie(),
+                                    callback=self.xss_chars_finder))
 
         if len(reqs) > 0:
             return reqs
