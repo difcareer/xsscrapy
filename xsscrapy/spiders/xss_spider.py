@@ -71,7 +71,6 @@ class XSSspider(CrawlSpider):
         self.cur_cookie = self.parse_raw_cookie()
         handler = IgnoreHandler()
         self.handler = handler
-        # thread.start_new_thread(handler.start_watch())
         handler.start_watch()
 
 
@@ -94,7 +93,7 @@ class XSSspider(CrawlSpider):
             url = req.url
             mt = False
             for st in ignore_start:
-                if url[0, len(st)] == st:
+                if url[0: len(st)] == st:
                     mt = True
             if not mt:
                 filtered.append(req)
@@ -109,6 +108,18 @@ class XSSspider(CrawlSpider):
             if not mt:
                 filtered.append(req)
         return filtered
+        pass
+
+    def is_ignored(self, url):
+        ignore_start = self.handler.start_with
+        for st in ignore_start:
+                if url.startswith(st):
+                    return True
+        ignore_pat = self.handler.pat
+        for st in ignore_pat:
+                if re.compile(st).match(url):
+                    return True
+        return False
         pass
 
     #### Handle logging in if username and password are given as arguments ####
@@ -209,6 +220,9 @@ class XSSspider(CrawlSpider):
         reqs = []
         orig_url = response.url
         body = response.body
+        if self.is_ignored(orig_url):
+            return reqs
+        logging.warning(orig_url)
 
         set_cookie = ""
         try:

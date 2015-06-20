@@ -12,6 +12,7 @@ class IgnoreHandler(FileSystemEventHandler):
     pat = []
 
     def __init__(self):
+        self.init2()
         pass
 
     def start_watch(self):
@@ -22,11 +23,15 @@ class IgnoreHandler(FileSystemEventHandler):
         pass
 
     def on_modified(self, event):
-        self.start_with = self.read_file(self.path+"/start.txt")
-        self.pat = self.read_file(self.path+"/pat.txt")
+        self.init2()
         pass
 
     def read_file(self, path):
-        return open(path, "r").readlines()
+        return open(path, "r").read().splitlines()
         pass
     pass
+
+    def init2(self):
+        self.start_with = self.read_file(self.path+"/start.txt")
+        self.pat = self.read_file(self.path+"/pat.txt")
+        pass
