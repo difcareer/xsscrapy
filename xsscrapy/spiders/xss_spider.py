@@ -93,7 +93,7 @@ class XSSspider(CrawlSpider):
             url = req.url
             mt = False
             for st in ignore_start:
-                if url[0: len(st)] == st:
+                if url.startswith(st):
                     mt = True
             if not mt:
                 filtered.append(req)
