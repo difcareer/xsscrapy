@@ -6,6 +6,7 @@ import string
 import random
 import logging
 import re
+import base64
 
 from scrapy.contrib.linkextractors import LinkExtractor
 
@@ -145,6 +146,7 @@ class XSSspider(CrawlSpider):
         if raw_cookie is None:
             return None
         dct = {}
+        raw_cookie = base64.b64decode(raw_cookie)
         kv = raw_cookie.split(';')
         for i in kv:
             pt = i.split('=')
